@@ -4,7 +4,7 @@ An MCP server that connects to OPC UA-enabled industrial systems, allowing AI ag
 
 This project is ideal for developers and engineers looking to bridge AI-driven workflows with industrial automation systems.
 
-![GitHub License](https://img.shields.io/github/license/kukapay/opcua-mcp)
+![GitHub License](https://img.shields.io/github/license/scholfa/opcua-mcp)
 ![Python Version](https://img.shields.io/badge/python-3.13+-blue)
 ![Status](https://img.shields.io/badge/status-active-brightgreen.svg)
 
