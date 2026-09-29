@@ -24,8 +24,8 @@ This project is ideal for developers and engineers looking to bridge AI-driven w
 ### Tools
 The server exposes six tools:
 - **`get_opcua_connection_info`**:
-  - **Description**: Show which OPC UA endpoint the server is connected to and the configured endpoints.
-  - **Returns**: e.g. "Connected to opc.tcp://127.0.0.1:4840 as anonymous. Configured endpoints, tried in order at startup: ..."
+  - **Description**: Show which OPC UA server the MCP server is connected to, checked live: the endpoint, the server's application URI and state, and the configured endpoints. Fails if the server is not answering (e.g. during a restart).
+  - **Returns**: e.g. "Connected to opc.tcp://host.docker.internal:4840 (server application URI urn:127.0.0.1/BR/UA/EmbeddedServer, state Running) as user 'Anonymous' with security Basic256Sha256 SignAndEncrypt. ..." — on B&R, `urn:127.0.0.1/...` identifies ARsim.
 
 - **`read_opcua_node`**:
   - **Description**: Read the value of a specific OPC UA node.
@@ -127,11 +127,12 @@ OPCUA_SERVER_URL=opc.tcp://127.0.0.1:4840,opc.tcp://192.168.0.10:4840
   same endpoint and never switches to another one, e.g. from the simulation to the real machine.
   Restart the MCP server to pick again. With stdio, the MCP client starts a fresh server per session.
 - The same credentials and security settings are used for every endpoint.
-- The `get_opcua_connection_info` tool reports which endpoint is in use, so you (or the model) can
-  check whether it is the simulation or the hardware before writing values.
+- The `get_opcua_connection_info` tool asks the server live which one it is (its application URI),
+  so you (or the model) can check whether it is the simulation or the hardware before writing values.
 - Use `127.0.0.1` rather than `localhost`: on Windows a stopped `localhost` endpoint takes about
   4 s to skip instead of 2 s. In Docker, `localhost` is the container itself; use
-  `opc.tcp://host.docker.internal:4840` to reach a simulation on the host.
+  `opc.tcp://host.docker.internal:4840` to reach a simulation on the host (the server logs a warning
+  at startup for a loopback entry when it runs in a container).
 
 ### Certificate-based security
 
