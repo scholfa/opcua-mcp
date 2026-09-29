@@ -4,6 +4,7 @@ import pytest
 from mcp import Client
 
 import main
+from config import Settings
 
 pytestmark = pytest.mark.anyio
 
@@ -11,7 +12,7 @@ pytestmark = pytest.mark.anyio
 @pytest.fixture
 async def mcp_client(opcua_server, monkeypatch):
     url, _ = opcua_server
-    monkeypatch.setattr(main, "server_url", url)
+    monkeypatch.setattr(main, "settings", Settings(opcua_server_url=url))
     async with Client(main.mcp) as client:
         yield client
 

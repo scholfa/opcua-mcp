@@ -1,26 +1,72 @@
 from mcp.server.mcpserver import MCPServer, Context
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp.server.transport_security import TransportSecuritySettings
 from asyncua import Client, Node, ua
 from contextlib import asynccontextmanager
+from pydantic import ValidationError
 from typing import Any, AsyncIterator, Dict, List
+from urllib.parse import urlsplit, urlunsplit
 import logging
-import os
+import sys
+
+from config import Settings
+
+
+def load_settings() -> Settings:
+    try:
+        return Settings()
+    except ValidationError as e:
+        # Leave out the input values: they can contain the password
+        problems = "\n".join(
+            f"  {'.'.join(map(str, err['loc'])) or 'settings'}: {err['msg']}"
+            for err in e.errors(include_input=False, include_url=False)
+        )
+        sys.exit(f"Invalid opcua-mcp configuration:\n{problems}")
+
+
+settings = load_settings()
 
 # Log to stderr: with the stdio transport, stdout carries the MCP protocol
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("opcua-mcp")
 logging.getLogger("asyncua").setLevel(logging.WARNING)
 
-server_url = os.getenv("OPCUA_SERVER_URL", "opc.tcp://localhost:4840")
+
+def create_client(settings: Settings) -> Client:
+    """Create the OPC UA client from settings. Certificate-based security will be configured here."""
+    client = Client(
+        settings.opcua_server_url,
+        timeout=settings.opcua_timeout,
+        auto_reconnect=settings.opcua_auto_reconnect,
+    )
+    if settings.opcua_username is not None:
+        client.set_user(settings.opcua_username)
+        client.set_password(settings.opcua_password.get_secret_value())
+    return client
+
+
+def _redact_url(url: str) -> str:
+    """Drop user:password@ from a URL before logging it."""
+    parts = urlsplit(url)
+    if parts.password is None:
+        return url
+    host_port = parts.netloc.rsplit("@", 1)[1]
+    return urlunsplit(parts._replace(netloc=f"{parts.username}:***@{host_port}"))
 
 
 # Manage the lifecycle of the OPC UA client connection
 @asynccontextmanager
 async def opcua_lifespan(server: MCPServer) -> AsyncIterator[dict]:
     """Handle OPC UA client connection lifecycle."""
-    client = Client(server_url)
-    await client.connect()
-    logger.info("Connected to OPC UA server %s", server_url)
+    client = create_client(settings)
+    url = _redact_url(settings.opcua_server_url)
+    auth = f"user '{settings.opcua_username}'" if settings.opcua_username else "anonymous"
+    try:
+        await client.connect()
+    except Exception as e:
+        logger.error("Could not connect to OPC UA server %s as %s: %s", url, auth, _describe_error(e))
+        raise
+    logger.info("Connected to OPC UA server %s as %s", url, auth)
     try:
         yield {"opcua_client": client}
     finally:
@@ -203,6 +249,27 @@ async def write_multiple_opcua_nodes(
     return f"Write multiple nodes results: {status_report!r}"
 
 
+def run() -> None:
+    """Run the MCP server with the transport chosen in the settings."""
+    if settings.mcp_transport == "stdio":
+        mcp.run("stdio")
+        return
+    transport_security = None
+    if settings.mcp_allowed_hosts:
+        transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=settings.mcp_allowed_hosts,
+            allowed_origins=[f"http://{host}" for host in settings.mcp_allowed_hosts],
+        )
+    logger.info("Serving MCP over %s on %s:%s", settings.mcp_transport, settings.mcp_host, settings.mcp_port)
+    mcp.run(
+        settings.mcp_transport,
+        host=settings.mcp_host,
+        port=settings.mcp_port,
+        transport_security=transport_security,
+    )
+
+
 # Run the server
 if __name__ == "__main__":
-    mcp.run()
+    run()

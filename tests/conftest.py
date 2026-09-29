@@ -1,5 +1,9 @@
+import os
 import socket
 from contextlib import asynccontextmanager
+
+# Keep a developer's local .env out of the tests; must happen before config is imported
+os.environ["OPCUA_MCP_ENV_FILE"] = os.devnull
 
 import pytest
 from asyncua import Server, ua

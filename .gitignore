@@ -11,3 +11,6 @@ wheels/
 
 # Test cache
 .pytest_cache/
+
+# Local configuration with credentials
+.env
