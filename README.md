@@ -227,8 +227,10 @@ docker run -d --env-file .env -e MCP_TRANSPORT=streamable-http -p 127.0.0.1:8000
 ```
 
 The compose file mounts `./certs` into the container, so it uses the same client certificate as
-a local run, and the OPC UA server only has to trust it once. On Linux, make sure `certs/` is
-writable for the container user (uid 10001) if the certificate is to be generated there.
+a local run, and the OPC UA server only has to trust it once. The container starts as root only
+to make the mounted `certs/` directory writable (Docker creates a missing one owned by root), then
+runs the server as an unprivileged user (uid 10001). A generated private key is readable by its
+owner only. On Linux, certificate files you supply must be readable by uid 10001.
 
 ### Reaching the OPC UA server from the container
 

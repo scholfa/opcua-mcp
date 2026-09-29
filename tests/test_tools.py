@@ -103,3 +103,36 @@ async def test_write_sends_no_timestamps(mcp_client, opcua_server):
     is_error, text = await call(mcp_client, "write_opcua_node", node_id=ids["int"], value="2")
     assert not is_error, text
     assert text == f"Successfully wrote 2 to node {ids['int']}"
+
+
+@pytest.mark.parametrize("value, expected", [("TRUE", True), (" false ", False), ("1", True), ("0", False)])
+async def test_write_bool_accepts_documented_forms(mcp_client, opcua_server, value, expected):
+    _, ids = opcua_server
+    is_error, text = await call(mcp_client, "write_opcua_node", node_id=ids["bool"], value=value)
+    assert not is_error, text
+    _, text = await call(mcp_client, "read_opcua_node", node_id=ids["bool"])
+    assert text.endswith(f"value: {expected}")
+
+
+@pytest.mark.parametrize("value", ["yes", "2", "ture", ""])
+async def test_write_bool_rejects_other_values(mcp_client, opcua_server, value):
+    _, ids = opcua_server
+    # Start from True so that a silent conversion to False would show
+    await call(mcp_client, "write_opcua_node", node_id=ids["bool"], value="true")
+    is_error, text = await call(mcp_client, "write_opcua_node", node_id=ids["bool"], value=value)
+    assert is_error
+    assert "Invalid boolean value" in text
+    _, text = await call(mcp_client, "read_opcua_node", node_id=ids["bool"])
+    assert text.endswith("value: True")
+
+
+async def test_write_multiple_rejects_invalid_bool(mcp_client, opcua_server):
+    _, ids = opcua_server
+    is_error, text = await call(
+        mcp_client,
+        "write_multiple_opcua_nodes",
+        nodes_to_write=[{"node_id": ids["bool"], "value": 2}, {"node_id": ids["int"], "value": 5}],
+    )
+    assert not is_error
+    assert "Invalid boolean value 2" in text
+    assert text.count("'Success'") == 1

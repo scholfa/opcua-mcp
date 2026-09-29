@@ -185,6 +185,19 @@ def _describe_error(e: Exception) -> str:
     return f"{type(e).__name__} - {e}"
 
 
+_BOOL_VALUES = {"true": True, "1": True, "false": False, "0": False}
+
+
+def _parse_bool(value: Any) -> bool:
+    """Accept only true/false/1/0 (any case) or a bool; anything else is an error, never False."""
+    if isinstance(value, bool):
+        return value
+    try:
+        return _BOOL_VALUES[str(value).strip().lower()]
+    except KeyError:
+        raise ValueError(f"Invalid boolean value {value!r}; use true, false, 1 or 0") from None
+
+
 async def _write_value(node: Node, value: Any) -> None:
     """Convert a value to the node's current Python type and write it with the node's variant type.
 
@@ -195,7 +208,7 @@ async def _write_value(node: Node, value: Any) -> None:
     python_typed_value = value
     # bool is a subclass of int, so check it first
     if isinstance(current_value, bool):
-        python_typed_value = value if isinstance(value, bool) else str(value).strip().lower() in ("true", "1")
+        python_typed_value = _parse_bool(value)
     elif isinstance(current_value, float):
         python_typed_value = float(value)
     elif isinstance(current_value, int):

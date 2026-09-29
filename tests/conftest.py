@@ -3,8 +3,14 @@ import socket
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 
-# Keep a developer's local .env out of the tests; must happen before config is imported
+# Keep a developer's local .env and exported settings out of the tests; must happen before
+# main (which loads the settings on import) is imported by any test module
 os.environ["OPCUA_MCP_ENV_FILE"] = os.devnull
+
+from config import Settings  # noqa: E402
+
+for _field in Settings.model_fields:
+    os.environ.pop(_field.upper(), None)
 
 import pytest
 from asyncua import Server, ua

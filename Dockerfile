@@ -16,6 +16,7 @@ RUN groupadd --system --gid 10001 app \
 WORKDIR /app
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --chown=app:app main.py config.py security.py ./
+COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/
 # Client certificate location; mount a volume here to keep a generated certificate
 RUN mkdir /app/certs && chown app:app /app/certs
 
@@ -28,6 +29,7 @@ ENV PATH="/app/.venv/bin:$PATH" \
     MCP_PORT=8000 \
     MCP_ALLOWED_HOSTS=localhost:*,127.0.0.1:*
 
-USER app
+# The entrypoint starts as root only to make a mounted /app/certs writable, then drops to
+# the unprivileged app user before starting the server
 EXPOSE 8000
-ENTRYPOINT ["python", "main.py"]
+ENTRYPOINT ["docker-entrypoint.sh"]

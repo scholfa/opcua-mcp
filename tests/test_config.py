@@ -3,27 +3,6 @@ from pydantic import ValidationError
 
 from config import Settings
 
-ENV_VARS = [
-    "OPCUA_SERVER_URL",
-    "OPCUA_USERNAME",
-    "OPCUA_PASSWORD",
-    "OPCUA_TIMEOUT",
-    "MCP_TRANSPORT",
-    "MCP_ALLOWED_HOSTS",
-    "LOG_LEVEL",
-    "OPCUA_SECURITY_POLICY",
-    "OPCUA_SECURITY_MODE",
-    "OPCUA_CLIENT_CERT",
-    "OPCUA_CLIENT_KEY",
-    "OPCUA_SERVER_CERT",
-]
-
-
-@pytest.fixture(autouse=True)
-def clean_env(monkeypatch):
-    for name in ENV_VARS:
-        monkeypatch.delenv(name, raising=False)
-
 
 @pytest.fixture
 def env_file(tmp_path):

@@ -1,3 +1,5 @@
+import os
+import stat
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -171,3 +173,12 @@ async def test_empty_password_is_sent_encrypted(tmp_path, monkeypatch):
         await connection_info(settings, monkeypatch)
     # Decrypted by the server: an empty string, not a missing password
     assert ("Anonymous", "") in users.received
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+async def test_generated_private_key_is_owner_only(tmp_path):
+    from security import prepare_client_certificate
+
+    settings = secure_settings("opc.tcp://plc:4840", tmp_path / "certs")
+    await prepare_client_certificate(settings)
+    assert stat.S_IMODE(settings.opcua_client_key.stat().st_mode) == 0o600

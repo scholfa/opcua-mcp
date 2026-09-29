@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -80,7 +81,10 @@ async def _generate(settings: Settings, application_uri: str) -> None:
         extended=[ExtendedKeyUsageOID.CLIENT_AUTH],
         days=GENERATED_CERT_DAYS,
     )
-    key_path.write_bytes(cert_gen.dump_private_key_as_pem(key))
+    # Owner-only from the start: write_bytes would use the umask (commonly 0644)
+    fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(cert_gen.dump_private_key_as_pem(key))
     der = cert.public_bytes(Encoding.DER)
     cert_path.write_bytes(der)
     logger.warning(
