@@ -1,0 +1,21 @@
+# Runs the MCP server as a long-lived Streamable HTTP service on
+# http://localhost:8000/mcp. Settings come from .env (see .env.example).
+services:
+  opcua-mcp:
+    build: .
+    image: opcua-mcp:latest
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      MCP_TRANSPORT: streamable-http
+    ports:
+      # Localhost only: the server has no MCP authentication of its own
+      - "127.0.0.1:8000:8000"
+    extra_hosts:
+      # Lets OPCUA_SERVER_URL=opc.tcp://host.docker.internal:4840 reach the host on Linux too
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    # Future certificate support:
+    # volumes:
+    #   - ./certs:/certs:ro

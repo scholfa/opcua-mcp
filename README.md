@@ -15,6 +15,8 @@ This project is ideal for developers and engineers looking to bridge AI-driven w
 - **Browse nodes**: Request to list allopcua  nodes
 - **Read multiple OPC UA Nodes**: Retrieve multiple real-time values from devices.
 - **Write to multiple OPC UA Nodes**: Control devices by writing values to multiple nodes.
+- **Credentials from `.env`**: Username/password login configured in a `.env` file or environment variables.
+- **Runs in Docker**: Over stdio (started by the MCP client) or as a long-running Streamable HTTP service.
 - **Seamless Integration**: Works with MCP clients like Claude Desktop for natural language interaction.
 
 
@@ -33,14 +35,22 @@ The server exposes five tools:
     - `value` (str): Value to write (converted based on node type).
   - **Returns**: A success or error message (e.g., "Successfully wrote 100 to node ns=2;i=3").
 
-- **`Browse nodes`**:
-  - **Description**: Read the value of a specific OPC UA node.
+- **`browse_opcua_node_children`**:
+  - **Description**: List the child nodes of a node, with their node IDs and browse names.
+  - **Parameters**:
+    - `node_id` (str): Node to browse (e.g., `ns=0;i=85` for the Objects folder).
 
-- **`Read multiple OPC UA Nodes`**:
-  - **Description**: Read the value of a specific OPC UA node.
+- **`read_multiple_opcua_nodes`**:
+  - **Description**: Read several node values in one request; unreadable nodes are reported individually.
+  - **Parameters**:
+    - `node_ids` (List[str]): Node IDs to read (e.g., `["ns=2;i=2", "ns=2;i=3"]`).
 
-- **`Write to multiple OPC UA Nodes`**:
-  - **Description**: Read the value of a specific OPC UA node.
+- **`write_multiple_opcua_nodes`**:
+  - **Description**: Write several node values, converting each to the node's type, and report the result per node.
+  - **Parameters**:
+    - `nodes_to_write` (List[Dict]): Items with `node_id` and `value` (e.g., `[{"node_id": "ns=2;i=2", "value": 10.5}]`).
+
+Failed calls are returned as MCP tool errors that include the OPC UA status code (e.g., `BadNodeIdUnknown`).
 
 
 ### Example Prompts
@@ -51,34 +61,121 @@ The server exposes five tools:
 ## Installation
 
 ### Prerequisites
-- Python 3.13 or higher
+- Python 3.13 or higher and [uv](https://docs.astral.sh/uv/) — or Docker
 - An OPC UA server (e.g., a simulator or real industrial device)
 
 ### Install Dependencies
 Clone the repository and install the required Python packages:
 
 ```bash
-git clone https://github.com/kukapay/opcua-mcp.git
+git clone https://github.com/scholfa/opcua-mcp.git
 cd opcua-mcp
-uv sync   # or: pip install "mcp[cli]>=2.2,<3" "asyncua>=2.0.1"
+uv sync   # or: pip install "mcp[cli]>=2.2,<3" "asyncua>=2.0.1" "pydantic-settings>=2.8"
 ```
+
+> **Upgrading from an earlier version:** the server now uses `asyncua` and `mcp` 2.x instead of
+> `opcua` and `mcp` 1.x. Run `uv sync` again (or reinstall the packages above) before starting it.
+
+## Configuration
+
+Settings are read from environment variables and from a `.env` file next to `main.py`.
+Real environment variables take precedence over the file. Start from the example:
+
+```bash
+cp .env.example .env
+```
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPCUA_SERVER_URL` | `opc.tcp://localhost:4840` | Endpoint of the OPC UA server |
+| `OPCUA_USERNAME` / `OPCUA_PASSWORD` | *(empty)* | Username/password login. Leave both empty for anonymous; setting only one is an error. |
+| `OPCUA_TIMEOUT` | `4` | Request timeout in seconds |
+| `OPCUA_AUTO_RECONNECT` | `true` | Reconnect automatically when the connection drops |
+| `MCP_TRANSPORT` | `stdio` | `stdio`, `streamable-http` or `sse` |
+| `MCP_HOST` / `MCP_PORT` | `127.0.0.1` / `8000` | Bind address for the HTTP transports |
+| `MCP_ALLOWED_HOSTS` | *(empty)* | Comma-separated `Host` headers accepted over HTTP (DNS rebinding protection), e.g. `localhost:*,127.0.0.1:*` |
+| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR` (logs go to stderr) |
+| `OPCUA_MCP_ENV_FILE` | `.env` next to `main.py` | Path of the `.env` file to read |
+
+`.env` is ignored by git and by the Docker build, so credentials stay out of commits and images.
+
+> **Security note:** certificate-based security (`Sign` / `SignAndEncrypt`) is not supported yet,
+> so the connection uses security policy `None`. Depending on the server, the password may then be
+> sent in plain text — asyncua logs `Sending plain-text password` when that happens. Only use
+> username/password login on trusted networks until certificate support is added. The variable
+> names `OPCUA_SECURITY_POLICY`, `OPCUA_SECURITY_MODE`, `OPCUA_CLIENT_CERT`, `OPCUA_CLIENT_KEY`
+> and `OPCUA_SERVER_CERT` are reserved for it.
 
 ### MCP Client Configuration
 
+With the settings in `.env`, the client config only needs to start the server:
+
 ```json
 {
- "mcpServers": {
-   "opcua-mcp": {
-     "command": "python",
-     "args": ["path/to/opcua_mcp/main.py"],
-     "env": {
-        "OPCUA_SERVER_URL": "your-opc-ua-server-url"
-     }
-   }
- }
+  "mcpServers": {
+    "opcua-mcp": {
+      "command": "uv",
+      "args": ["run", "--project", "path/to/opcua-mcp", "python", "path/to/opcua-mcp/main.py"]
+    }
+  }
 }
 ```
 
+Values in `"env"` still work and override `.env`, e.g. `"env": {"OPCUA_SERVER_URL": "opc.tcp://192.168.0.10:4840"}`.
+
+## Running in Docker
+
+Build the image:
+
+```bash
+docker build -t opcua-mcp .
+```
+
+Credentials are never baked into the image; pass them at runtime with `--env-file .env`.
+Docker takes everything after `=` literally, so don't put quotes around values in `.env`.
+
+### stdio (the MCP client starts the container)
+
+```json
+{
+  "mcpServers": {
+    "opcua-mcp": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "--env-file", "C:/path/to/opcua-mcp/.env", "opcua-mcp"]
+    }
+  }
+}
+```
+
+### Streamable HTTP (long-running service)
+
+```bash
+docker compose up -d --build
+```
+
+The MCP endpoint is then `http://localhost:8000/mcp`. The compose file publishes the port on
+localhost only, because the server has no MCP-level authentication. To accept other `Host` names
+(for example when publishing the port on the LAN), set `MCP_ALLOWED_HOSTS` accordingly.
+
+Without compose:
+
+```bash
+docker run -d --env-file .env -e MCP_TRANSPORT=streamable-http -p 127.0.0.1:8000:8000 opcua-mcp
+```
+
+### Reaching the OPC UA server from the container
+
+- OPC UA server on the Docker host: `OPCUA_SERVER_URL=opc.tcp://host.docker.internal:4840`
+  (works on Docker Desktop; the compose file also maps it on Linux).
+- PLC or server on the LAN: use its IP address or DNS name as usual.
+
+## Development
+
+```bash
+uv run pytest
+```
+
+The tests start an in-process asyncua server, including one that requires a username and password.
 
 ## License
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.

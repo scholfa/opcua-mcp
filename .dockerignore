@@ -1,0 +1,11 @@
+# Never send local credentials or environments into the build context
+.env
+.env.*
+!.env.example
+.venv
+.git
+.pytest_cache
+__pycache__
+*.py[oc]
+tests
+certs
