@@ -33,7 +33,7 @@ def env_file(tmp_path):
 
 def test_defaults():
     settings = Settings(_env_file=None)
-    assert settings.opcua_server_url == "opc.tcp://localhost:4840"
+    assert settings.opcua_server_url == ["opc.tcp://localhost:4840"]
     assert settings.opcua_username is None
     assert settings.opcua_password is None
     assert settings.mcp_transport == "stdio"
@@ -51,7 +51,7 @@ def test_reads_env_file(env_file):
         "LOG_LEVEL=debug\n"
     )
     settings = Settings(_env_file=path)
-    assert settings.opcua_server_url == "opc.tcp://192.168.0.10:4840"
+    assert settings.opcua_server_url == ["opc.tcp://192.168.0.10:4840"]
     assert settings.opcua_username == "operator"
     assert settings.opcua_password.get_secret_value() == "s3cret!"
     assert settings.opcua_timeout == 10.0
@@ -63,7 +63,7 @@ def test_reads_env_file(env_file):
 def test_environment_overrides_env_file(env_file, monkeypatch):
     path = env_file("OPCUA_SERVER_URL=opc.tcp://from-file:4840\n")
     monkeypatch.setenv("OPCUA_SERVER_URL", "opc.tcp://from-env:4840")
-    assert Settings(_env_file=path).opcua_server_url == "opc.tcp://from-env:4840"
+    assert Settings(_env_file=path).opcua_server_url == ["opc.tcp://from-env:4840"]
 
 
 def test_empty_credentials_mean_anonymous(env_file):
@@ -87,3 +87,13 @@ def test_password_is_not_shown(env_file):
 def test_rejects_unknown_transport():
     with pytest.raises(ValidationError):
         Settings(_env_file=None, mcp_transport="websocket")
+
+
+def test_server_url_list_keeps_order(env_file):
+    path = env_file("OPCUA_SERVER_URL=opc.tcp://localhost:4840, opc.tcp://192.168.0.10:4840\n")
+    assert Settings(_env_file=path).opcua_server_url == ["opc.tcp://localhost:4840", "opc.tcp://192.168.0.10:4840"]
+
+
+def test_server_url_must_not_be_empty(env_file):
+    with pytest.raises(ValidationError, match="at least one endpoint URL"):
+        Settings(_env_file=env_file("OPCUA_SERVER_URL=\n"))

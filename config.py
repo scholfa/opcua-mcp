@@ -20,7 +20,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8", extra="ignore")
 
     # OPC UA connection
-    opcua_server_url: str = "opc.tcp://localhost:4840"
+    # Comma-separated endpoint URLs, tried in order at startup; the first reachable one is used,
+    # e.g. "opc.tcp://localhost:4840,opc.tcp://192.168.0.10:4840" (simulation first, then hardware)
+    opcua_server_url: Annotated[list[str], NoDecode] = ["opc.tcp://localhost:4840"]
     opcua_username: str | None = None
     opcua_password: SecretStr | None = None
     opcua_timeout: float = 4.0
@@ -46,11 +48,18 @@ class Settings(BaseSettings):
         # An empty "OPCUA_USERNAME=" line in .env means "not set"
         return None if value == "" else value
 
-    @field_validator("mcp_allowed_hosts", mode="before")
+    @field_validator("opcua_server_url", "mcp_allowed_hosts", mode="before")
     @classmethod
-    def _split_hosts(cls, value):
+    def _split_list(cls, value):
         if isinstance(value, str):
-            return [host.strip() for host in value.split(",") if host.strip()]
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
+    @field_validator("opcua_server_url")
+    @classmethod
+    def _at_least_one_url(cls, value):
+        if not value:
+            raise ValueError("OPCUA_SERVER_URL must contain at least one endpoint URL")
         return value
 
     @field_validator("log_level", mode="before")

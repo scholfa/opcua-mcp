@@ -25,6 +25,7 @@ async def call(client: Client, tool: str, **arguments) -> tuple[bool, str]:
 async def test_lists_all_tools(mcp_client):
     tools = {t.name for t in (await mcp_client.list_tools()).tools}
     assert tools == {
+        "get_opcua_connection_info",
         "read_opcua_node",
         "write_opcua_node",
         "browse_opcua_node_children",

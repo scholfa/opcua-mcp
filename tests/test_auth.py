@@ -54,14 +54,15 @@ async def test_rejected_login_fails_startup(auth_server, monkeypatch, caplog, cr
 
 def test_create_client_sets_credentials():
     client = main.create_client(
-        Settings(opcua_server_url="opc.tcp://plc:4840", opcua_username=USERNAME, opcua_password=PASSWORD)
+        Settings(opcua_server_url="opc.tcp://plc:4840", opcua_username=USERNAME, opcua_password=PASSWORD),
+        "opc.tcp://plc:4840",
     )
     assert client._username == USERNAME
     assert client._password == PASSWORD
 
 
 def test_create_client_anonymous():
-    client = main.create_client(Settings(opcua_server_url="opc.tcp://plc:4840"))
+    client = main.create_client(Settings(opcua_server_url="opc.tcp://plc:4840"), "opc.tcp://plc:4840")
     assert client._username is None
     assert client._password is None
 

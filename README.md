@@ -21,7 +21,11 @@ This project is ideal for developers and engineers looking to bridge AI-driven w
 
 
 ### Tools
-The server exposes five tools:
+The server exposes six tools:
+- **`get_opcua_connection_info`**:
+  - **Description**: Show which OPC UA endpoint the server is connected to and the configured endpoints.
+  - **Returns**: e.g. "Connected to opc.tcp://127.0.0.1:4840 as anonymous. Configured endpoints, tried in order at startup: ..."
+
 - **`read_opcua_node`**:
   - **Description**: Read the value of a specific OPC UA node.
   - **Parameters**:
@@ -87,7 +91,7 @@ cp .env.example .env
 
 | Variable | Default | Description |
 |---|---|---|
-| `OPCUA_SERVER_URL` | `opc.tcp://localhost:4840` | Endpoint of the OPC UA server |
+| `OPCUA_SERVER_URL` | `opc.tcp://localhost:4840` | Endpoint URL, or several separated by commas — see [Multiple OPC UA servers](#multiple-opc-ua-servers) |
 | `OPCUA_USERNAME` / `OPCUA_PASSWORD` | *(empty)* | Username/password login. Leave both empty for anonymous; setting only one is an error. |
 | `OPCUA_TIMEOUT` | `4` | Request timeout in seconds |
 | `OPCUA_AUTO_RECONNECT` | `true` | Reconnect automatically when the connection drops |
@@ -98,6 +102,28 @@ cp .env.example .env
 | `OPCUA_MCP_ENV_FILE` | `.env` next to `main.py` | Path of the `.env` file to read |
 
 `.env` is ignored by git and by the Docker build, so credentials stay out of commits and images.
+
+### Multiple OPC UA servers
+
+List several endpoints to use a simulation when it is running and the real hardware otherwise:
+
+```bash
+OPCUA_SERVER_URL=opc.tcp://127.0.0.1:4840,opc.tcp://192.168.0.10:4840
+```
+
+- At startup the endpoints are tried in order and the first **reachable** one is used. Each
+  unreachable endpoint costs up to `OPCUA_TIMEOUT` seconds before the next one is tried.
+- An endpoint that is reachable but refuses the login (e.g. wrong credentials) stops startup with
+  an error instead of moving on, so a configuration mistake never silently lands on the next server.
+- The choice is made once, at startup. If the connection drops later, the server reconnects to the
+  same endpoint and never switches to another one, e.g. from the simulation to the real machine.
+  Restart the MCP server to pick again. With stdio, the MCP client starts a fresh server per session.
+- The same credentials are used for every endpoint.
+- The `get_opcua_connection_info` tool reports which endpoint is in use, so you (or the model) can
+  check whether it is the simulation or the hardware before writing values.
+- Use `127.0.0.1` rather than `localhost`: on Windows a stopped `localhost` endpoint takes about
+  4 s to skip instead of 2 s. In Docker, `localhost` is the container itself; use
+  `opc.tcp://host.docker.internal:4840` to reach a simulation on the host.
 
 > **Security note:** certificate-based security (`Sign` / `SignAndEncrypt`) is not supported yet,
 > so the connection uses security policy `None`. Depending on the server, the password may then be

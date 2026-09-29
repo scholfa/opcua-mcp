@@ -32,10 +32,10 @@ logger = logging.getLogger("opcua-mcp")
 logging.getLogger("asyncua").setLevel(logging.WARNING)
 
 
-def create_client(settings: Settings) -> Client:
-    """Create the OPC UA client from settings. Certificate-based security will be configured here."""
+def create_client(settings: Settings, url: str) -> Client:
+    """Create the OPC UA client for one endpoint. Certificate-based security will be configured here."""
     client = Client(
-        settings.opcua_server_url,
+        url,
         timeout=settings.opcua_timeout,
         auto_reconnect=settings.opcua_auto_reconnect,
     )
@@ -54,21 +54,44 @@ def _redact_url(url: str) -> str:
     return urlunsplit(parts._replace(netloc=f"{parts.username}:***@{host_port}"))
 
 
+def _auth_description(settings: Settings) -> str:
+    return f"user '{settings.opcua_username}'" if settings.opcua_username else "anonymous"
+
+
+async def connect_first_available(settings: Settings) -> tuple[Client, str]:
+    """Connect to the first reachable endpoint in settings.opcua_server_url, in order.
+
+    Only unreachable endpoints (refused, timed out, unknown host) are skipped. An endpoint
+    that answers but refuses the session, e.g. because of wrong credentials, stops the
+    search: silently moving on to the next server (possibly real hardware) would hide it.
+    """
+    auth = _auth_description(settings)
+    unreachable = []
+    for url in settings.opcua_server_url:
+        client = create_client(settings, url)
+        try:
+            await client.connect()
+        except OSError as e:  # includes TimeoutError and DNS errors
+            logger.warning("OPC UA server %s not reachable: %s", _redact_url(url), _describe_error(e))
+            unreachable.append(_redact_url(url))
+            continue
+        except Exception as e:
+            logger.error("Could not connect to OPC UA server %s as %s: %s", _redact_url(url), auth, _describe_error(e))
+            raise
+        logger.info("Connected to OPC UA server %s as %s", _redact_url(url), auth)
+        return client, url
+    message = f"No OPC UA server reachable, tried: {', '.join(unreachable)}"
+    logger.error(message)
+    raise ConnectionError(message)
+
+
 # Manage the lifecycle of the OPC UA client connection
 @asynccontextmanager
 async def opcua_lifespan(server: MCPServer) -> AsyncIterator[dict]:
     """Handle OPC UA client connection lifecycle."""
-    client = create_client(settings)
-    url = _redact_url(settings.opcua_server_url)
-    auth = f"user '{settings.opcua_username}'" if settings.opcua_username else "anonymous"
+    client, url = await connect_first_available(settings)
     try:
-        await client.connect()
-    except Exception as e:
-        logger.error("Could not connect to OPC UA server %s as %s: %s", url, auth, _describe_error(e))
-        raise
-    logger.info("Connected to OPC UA server %s as %s", url, auth)
-    try:
-        yield {"opcua_client": client}
+        yield {"opcua_client": client, "opcua_url": url}
     finally:
         await client.disconnect()
         logger.info("Disconnected from OPC UA server")
@@ -101,6 +124,24 @@ async def _write_value(node: Node, value: Any) -> None:
     elif isinstance(current_value, int):
         python_typed_value = int(value)
     await node.write_value(python_typed_value, await node.read_data_type_as_variant_type())
+
+
+@mcp.tool()
+def get_opcua_connection_info(ctx: Context) -> str:
+    """
+    Show which OPC UA server this MCP server is connected to.
+
+    Use this to tell a simulation (e.g. localhost) from real hardware before writing values.
+
+    Returns:
+        str: The connected endpoint URL, the login used, and the configured endpoints in the order they are tried.
+    """
+    url = ctx.request_context.lifespan_context["opcua_url"]
+    configured = ", ".join(_redact_url(u) for u in settings.opcua_server_url)
+    return (
+        f"Connected to {_redact_url(url)} as {_auth_description(settings)}. "
+        f"Configured endpoints, tried in order at startup: {configured}"
+    )
 
 
 # Tool: Read the value of an OPC UA node
