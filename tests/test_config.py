@@ -11,6 +11,11 @@ ENV_VARS = [
     "MCP_TRANSPORT",
     "MCP_ALLOWED_HOSTS",
     "LOG_LEVEL",
+    "OPCUA_SECURITY_POLICY",
+    "OPCUA_SECURITY_MODE",
+    "OPCUA_CLIENT_CERT",
+    "OPCUA_CLIENT_KEY",
+    "OPCUA_SERVER_CERT",
 ]
 
 
@@ -72,10 +77,16 @@ def test_empty_credentials_mean_anonymous(env_file):
     assert settings.opcua_password is None
 
 
-@pytest.mark.parametrize("content", ["OPCUA_USERNAME=operator\n", "OPCUA_PASSWORD=s3cret!\n"])
-def test_username_and_password_required_together(env_file, content):
-    with pytest.raises(ValidationError, match="must be set together"):
-        Settings(_env_file=env_file(content))
+def test_username_without_password_means_empty_password(env_file):
+    # B&R: the user "Anonymous" without a password
+    settings = Settings(_env_file=env_file("OPCUA_USERNAME=Anonymous\nOPCUA_PASSWORD=\n"))
+    assert settings.opcua_username == "Anonymous"
+    assert settings.opcua_password is None
+
+
+def test_password_requires_username(env_file):
+    with pytest.raises(ValidationError, match="OPCUA_PASSWORD is set but OPCUA_USERNAME is not"):
+        Settings(_env_file=env_file("OPCUA_PASSWORD=s3cret!\n"))
 
 
 def test_password_is_not_shown(env_file):
@@ -97,3 +108,30 @@ def test_server_url_list_keeps_order(env_file):
 def test_server_url_must_not_be_empty(env_file):
     with pytest.raises(ValidationError, match="at least one endpoint URL"):
         Settings(_env_file=env_file("OPCUA_SERVER_URL=\n"))
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("Aes128_Sha256_RsaOaep", "Aes128_Sha256_RsaOaep"),
+        ("aes128sha256rsaoaep", "Aes128_Sha256_RsaOaep"),
+        ("basic256sha256", "Basic256Sha256"),
+        ("none", "None"),
+    ],
+)
+def test_security_policy_spellings(value, expected):
+    assert Settings(_env_file=None, opcua_security_policy=value).opcua_security_policy == expected
+
+
+def test_rejects_unknown_security_policy():
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, opcua_security_policy="Basic128Rsa15")
+
+
+def test_certificate_paths_are_relative_to_project(env_file):
+    from config import PROJECT_DIR
+
+    settings = Settings(_env_file=env_file("OPCUA_CLIENT_CERT=certs/mine.der\nOPCUA_SERVER_CERT=\n"))
+    assert settings.opcua_client_cert == PROJECT_DIR / "certs" / "mine.der"
+    assert settings.opcua_client_key == PROJECT_DIR / "certs" / "client_key.pem"
+    assert settings.opcua_server_cert is None

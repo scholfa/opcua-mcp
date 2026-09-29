@@ -25,7 +25,7 @@ async def connection_info(settings: Settings, monkeypatch) -> str:
 async def test_uses_first_reachable_server(opcua_server, monkeypatch):
     url, _ = opcua_server
     text = await connection_info(Settings(opcua_server_url=[unreachable_url(), url]), monkeypatch)
-    assert text.startswith(f"Connected to {url} as anonymous.")
+    assert text.startswith(f"Connected to {url} as anonymous with security policy None.")
 
 
 async def test_prefers_earlier_server_when_both_are_reachable(monkeypatch):

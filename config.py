@@ -11,9 +11,18 @@ from typing import Annotated, Literal
 from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+PROJECT_DIR = Path(__file__).parent
+
 # The .env next to this file, not in the working directory: MCP clients often
 # start the server from an unrelated directory. OPCUA_MCP_ENV_FILE overrides it.
-ENV_FILE = Path(os.getenv("OPCUA_MCP_ENV_FILE", Path(__file__).parent / ".env"))
+ENV_FILE = Path(os.getenv("OPCUA_MCP_ENV_FILE", PROJECT_DIR / ".env"))
+
+# Accepted spellings: the OPC UA names as servers list them (e.g. "Aes128_Sha256_RsaOaep"),
+# with or without underscores, in any case
+SECURITY_POLICIES = {
+    name.replace("_", "").lower(): name
+    for name in ("None", "Basic256Sha256", "Aes128_Sha256_RsaOaep", "Aes256_Sha256_RsaPss")
+}
 
 
 class Settings(BaseSettings):
@@ -23,14 +32,27 @@ class Settings(BaseSettings):
     # Comma-separated endpoint URLs, tried in order at startup; the first reachable one is used,
     # e.g. "opc.tcp://localhost:4840,opc.tcp://192.168.0.10:4840" (simulation first, then hardware)
     opcua_server_url: Annotated[list[str], NoDecode] = ["opc.tcp://localhost:4840"]
+    # A username without a password logs in with an empty password
     opcua_username: str | None = None
     opcua_password: SecretStr | None = None
     opcua_timeout: float = 4.0
     opcua_auto_reconnect: bool = True
 
-    # Reserved for certificate-based security, not implemented yet:
-    # OPCUA_SECURITY_POLICY, OPCUA_SECURITY_MODE, OPCUA_CLIENT_CERT,
-    # OPCUA_CLIENT_KEY, OPCUA_SERVER_CERT
+    # Certificate-based security. With a policy other than None, the client certificate and key
+    # are generated on first start if neither file exists. Relative paths are resolved against
+    # the directory of this file.
+    opcua_security_policy: Literal["None", "Basic256Sha256", "Aes128_Sha256_RsaOaep", "Aes256_Sha256_RsaPss"] = "None"
+    opcua_security_mode: Literal["Sign", "SignAndEncrypt"] = "SignAndEncrypt"
+    opcua_client_cert: Path = Path("certs/client_cert.der")
+    opcua_client_key: Path = Path("certs/client_key.pem")
+    opcua_client_key_password: SecretStr | None = None
+    # Pin the server certificate; without it the server's certificate is accepted as presented
+    opcua_server_cert: Path | None = None
+    # Default: the URI in the client certificate, or urn:opcua-mcp:client for a generated one
+    opcua_application_uri: str | None = None
+    # DNS name written into a generated certificate; fixed so that a container's changing
+    # hostname never invalidates the certificate the server was told to trust
+    opcua_client_hostname: str = "opcua-mcp"
 
     # MCP transport
     mcp_transport: Literal["stdio", "sse", "streamable-http"] = "stdio"
@@ -42,11 +64,30 @@ class Settings(BaseSettings):
 
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
-    @field_validator("opcua_username", "opcua_password", mode="before")
+    @field_validator(
+        "opcua_username",
+        "opcua_password",
+        "opcua_client_key_password",
+        "opcua_server_cert",
+        "opcua_application_uri",
+        mode="before",
+    )
     @classmethod
     def _empty_as_unset(cls, value):
         # An empty "OPCUA_USERNAME=" line in .env means "not set"
         return None if value == "" else value
+
+    @field_validator("opcua_security_policy", mode="before")
+    @classmethod
+    def _normalize_policy(cls, value):
+        if isinstance(value, str):
+            return SECURITY_POLICIES.get(value.replace("_", "").replace("-", "").lower(), value)
+        return value
+
+    @field_validator("opcua_client_cert", "opcua_client_key", "opcua_server_cert")
+    @classmethod
+    def _resolve_path(cls, value):
+        return value if value is None or value.is_absolute() else PROJECT_DIR / value
 
     @field_validator("opcua_server_url", "mcp_allowed_hosts", mode="before")
     @classmethod
@@ -68,7 +109,7 @@ class Settings(BaseSettings):
         return value.upper() if isinstance(value, str) else value
 
     @model_validator(mode="after")
-    def _username_and_password_together(self):
-        if (self.opcua_username is None) != (self.opcua_password is None):
-            raise ValueError("OPCUA_USERNAME and OPCUA_PASSWORD must be set together")
+    def _password_needs_username(self):
+        if self.opcua_password is not None and self.opcua_username is None:
+            raise ValueError("OPCUA_PASSWORD is set but OPCUA_USERNAME is not")
         return self

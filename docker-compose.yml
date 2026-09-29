@@ -5,6 +5,8 @@ services:
   opcua-mcp:
     build: .
     image: opcua-mcp:latest
+    # Matches the DNS name in a generated client certificate (OPCUA_CLIENT_HOSTNAME)
+    hostname: opcua-mcp
     env_file:
       - path: .env
         required: false
@@ -16,7 +18,8 @@ services:
     extra_hosts:
       # Lets OPCUA_SERVER_URL=opc.tcp://host.docker.internal:4840 reach the host on Linux too
       - "host.docker.internal:host-gateway"
+    volumes:
+      # OPC UA client certificate and key: generated here on first start when a security
+      # policy is set, and kept so the OPC UA server only has to trust it once
+      - ./certs:/app/certs
     restart: unless-stopped
-    # Future certificate support:
-    # volumes:
-    #   - ./certs:/certs:ro

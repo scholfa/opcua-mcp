@@ -16,6 +16,7 @@ This project is ideal for developers and engineers looking to bridge AI-driven w
 - **Read multiple OPC UA Nodes**: Retrieve multiple real-time values from devices.
 - **Write to multiple OPC UA Nodes**: Control devices by writing values to multiple nodes.
 - **Credentials from `.env`**: Username/password login configured in a `.env` file or environment variables.
+- **Encrypted connections**: Sign / SignAndEncrypt with an automatically generated or supplied client certificate.
 - **Runs in Docker**: Over stdio (started by the MCP client) or as a long-running Streamable HTTP service.
 - **Seamless Integration**: Works with MCP clients like Claude Desktop for natural language interaction.
 
@@ -92,9 +93,16 @@ cp .env.example .env
 | Variable | Default | Description |
 |---|---|---|
 | `OPCUA_SERVER_URL` | `opc.tcp://localhost:4840` | Endpoint URL, or several separated by commas — see [Multiple OPC UA servers](#multiple-opc-ua-servers) |
-| `OPCUA_USERNAME` / `OPCUA_PASSWORD` | *(empty)* | Username/password login. Leave both empty for anonymous; setting only one is an error. |
+| `OPCUA_USERNAME` / `OPCUA_PASSWORD` | *(empty)* | Username/password login. Leave both empty for anonymous. A username without a password logs in with an empty password (B&R: user `Anonymous`); a password without a username is an error. |
 | `OPCUA_TIMEOUT` | `4` | Request timeout in seconds |
 | `OPCUA_AUTO_RECONNECT` | `true` | Reconnect automatically when the connection drops |
+| `OPCUA_SECURITY_POLICY` | `None` | `None`, `Basic256Sha256`, `Aes128_Sha256_RsaOaep` or `Aes256_Sha256_RsaPss` — see [Certificate-based security](#certificate-based-security) |
+| `OPCUA_SECURITY_MODE` | `SignAndEncrypt` | `Sign` or `SignAndEncrypt` |
+| `OPCUA_CLIENT_CERT` / `OPCUA_CLIENT_KEY` | `certs/client_cert.der` / `certs/client_key.pem` | Client certificate (DER or PEM) and private key; generated if neither exists |
+| `OPCUA_CLIENT_KEY_PASSWORD` | *(empty)* | Password of an encrypted private key |
+| `OPCUA_SERVER_CERT` | *(empty)* | Pin the server certificate |
+| `OPCUA_APPLICATION_URI` | from the client certificate | Application URI the client presents |
+| `OPCUA_CLIENT_HOSTNAME` | `opcua-mcp` | DNS name written into a generated certificate |
 | `MCP_TRANSPORT` | `stdio` | `stdio`, `streamable-http` or `sse` |
 | `MCP_HOST` / `MCP_PORT` | `127.0.0.1` / `8000` | Bind address for the HTTP transports |
 | `MCP_ALLOWED_HOSTS` | *(empty)* | Comma-separated `Host` headers accepted over HTTP (DNS rebinding protection), e.g. `localhost:*,127.0.0.1:*` |
@@ -118,19 +126,47 @@ OPCUA_SERVER_URL=opc.tcp://127.0.0.1:4840,opc.tcp://192.168.0.10:4840
 - The choice is made once, at startup. If the connection drops later, the server reconnects to the
   same endpoint and never switches to another one, e.g. from the simulation to the real machine.
   Restart the MCP server to pick again. With stdio, the MCP client starts a fresh server per session.
-- The same credentials are used for every endpoint.
+- The same credentials and security settings are used for every endpoint.
 - The `get_opcua_connection_info` tool reports which endpoint is in use, so you (or the model) can
   check whether it is the simulation or the hardware before writing values.
 - Use `127.0.0.1` rather than `localhost`: on Windows a stopped `localhost` endpoint takes about
   4 s to skip instead of 2 s. In Docker, `localhost` is the container itself; use
   `opc.tcp://host.docker.internal:4840` to reach a simulation on the host.
 
-> **Security note:** certificate-based security (`Sign` / `SignAndEncrypt`) is not supported yet,
-> so the connection uses security policy `None`. Depending on the server, the password may then be
-> sent in plain text — asyncua logs `Sending plain-text password` when that happens. Only use
-> username/password login on trusted networks until certificate support is added. The variable
-> names `OPCUA_SECURITY_POLICY`, `OPCUA_SECURITY_MODE`, `OPCUA_CLIENT_CERT`, `OPCUA_CLIENT_KEY`
-> and `OPCUA_SERVER_CERT` are reserved for it.
+### Certificate-based security
+
+Set a security policy to sign and encrypt the connection. B&R PLCs disable policy `None` by
+default and only accept encrypted connections:
+
+```bash
+OPCUA_SECURITY_POLICY=Basic256Sha256
+OPCUA_SECURITY_MODE=SignAndEncrypt
+```
+
+- **Client certificate:** if neither `OPCUA_CLIENT_CERT` nor `OPCUA_CLIENT_KEY` exists, a
+  self-signed certificate (valid for 5 years) and key are generated in `certs/` on first start and
+  the log shows the certificate's SHA-256 fingerprint. Existing files are never replaced, so you can
+  also supply your own (e.g. CA-issued) certificate; the application URI is then taken from it.
+  To renew a generated certificate, delete both files and restart. `certs/` is ignored by git and
+  by the Docker build.
+- **Trust on the server:** the OPC UA server must trust the client certificate, unless it is
+  configured not to validate clients. When it rejects the certificate, the log names the file to
+  add to the server's trusted certificates. For a B&R PLC in Automation Studio:
+  1. Add `certs/client_cert.der` to the Configuration View under
+     *AccessAndSecurity > CertificateStore > ThirdPartyCertificates* (Object Catalog → existing file).
+  2. Under *AccessAndSecurity > TransportLayerSecurity*, open the SSL configuration of type
+     *OPC UA SSL configuration* that the OPC UA server uses (or add one), enable
+     *Validate SSL communication partner* and select the certificate under *Trusted certificates*.
+  3. In the OPC UA server's security settings, select that SSL configuration as
+     *CertificateStore configuration*, then transfer the project.
+- **Server certificate:** by default the certificate the server presents is accepted and its
+  SHA-256 fingerprint is logged, which encrypts the connection but does not prove the server's
+  identity. Set `OPCUA_SERVER_CERT` to the server's certificate file to accept only that server.
+- **Passwords** in the username token are encrypted with the server certificate, including an
+  empty password (B&R rejects an unencrypted empty password with `BadIdentityTokenInvalid`).
+
+With policy `None` there is no encryption; depending on the server the password may then be sent in
+plain text (asyncua logs `Sending plain-text password`). Only use that on trusted networks.
 
 ### MCP Client Configuration
 
@@ -189,6 +225,10 @@ Without compose:
 docker run -d --env-file .env -e MCP_TRANSPORT=streamable-http -p 127.0.0.1:8000:8000 opcua-mcp
 ```
 
+The compose file mounts `./certs` into the container, so it uses the same client certificate as
+a local run, and the OPC UA server only has to trust it once. On Linux, make sure `certs/` is
+writable for the container user (uid 10001) if the certificate is to be generated there.
+
 ### Reaching the OPC UA server from the container
 
 - OPC UA server on the Docker host: `OPCUA_SERVER_URL=opc.tcp://host.docker.internal:4840`
@@ -201,7 +241,8 @@ docker run -d --env-file .env -e MCP_TRANSPORT=streamable-http -p 127.0.0.1:8000
 uv run pytest
 ```
 
-The tests start an in-process asyncua server, including one that requires a username and password.
+The tests start in-process asyncua servers: plain, requiring a username and password, and
+encrypted-only (like a B&R PLC).
 
 ## License
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.

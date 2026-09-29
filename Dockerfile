@@ -15,7 +15,9 @@ RUN groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --no-create-home app
 WORKDIR /app
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
-COPY --chown=app:app main.py config.py ./
+COPY --chown=app:app main.py config.py security.py ./
+# Client certificate location; mount a volume here to keep a generated certificate
+RUN mkdir /app/certs && chown app:app /app/certs
 
 # Credentials are never baked into the image: pass them at runtime,
 # e.g. docker run --env-file .env ...

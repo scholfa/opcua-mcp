@@ -52,8 +52,8 @@ async def test_rejected_login_fails_startup(auth_server, monkeypatch, caplog, cr
     assert "wrong" not in caplog.text
 
 
-def test_create_client_sets_credentials():
-    client = main.create_client(
+async def test_create_client_sets_credentials():
+    client = await main.create_client(
         Settings(opcua_server_url="opc.tcp://plc:4840", opcua_username=USERNAME, opcua_password=PASSWORD),
         "opc.tcp://plc:4840",
     )
@@ -61,8 +61,8 @@ def test_create_client_sets_credentials():
     assert client._password == PASSWORD
 
 
-def test_create_client_anonymous():
-    client = main.create_client(Settings(opcua_server_url="opc.tcp://plc:4840"), "opc.tcp://plc:4840")
+async def test_create_client_anonymous():
+    client = await main.create_client(Settings(opcua_server_url="opc.tcp://plc:4840"), "opc.tcp://plc:4840")
     assert client._username is None
     assert client._password is None
 
@@ -84,5 +84,13 @@ def test_invalid_config_does_not_print_password(monkeypatch):
     monkeypatch.delenv("OPCUA_USERNAME", raising=False)
     with pytest.raises(SystemExit) as exc:
         main.load_settings()
-    assert "must be set together" in str(exc.value.code)
+    assert "OPCUA_PASSWORD is set but OPCUA_USERNAME is not" in str(exc.value.code)
     assert PASSWORD not in str(exc.value.code)
+
+
+async def test_username_without_password_sends_empty_password():
+    client = await main.create_client(
+        Settings(opcua_server_url="opc.tcp://plc:4840", opcua_username="Anonymous"), "opc.tcp://plc:4840"
+    )
+    assert client._username == "Anonymous"
+    assert client._password == ""

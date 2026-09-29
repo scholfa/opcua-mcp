@@ -10,6 +10,14 @@ import logging
 import sys
 
 from config import Settings
+from security import (
+    OpcUaClient,
+    CertificateError,
+    ClientCertificate,
+    apply_security,
+    prepare_client_certificate,
+    server_certificate_fingerprint,
+)
 
 
 def load_settings() -> Settings:
@@ -32,16 +40,23 @@ logger = logging.getLogger("opcua-mcp")
 logging.getLogger("asyncua").setLevel(logging.WARNING)
 
 
-def create_client(settings: Settings, url: str) -> Client:
-    """Create the OPC UA client for one endpoint. Certificate-based security will be configured here."""
-    client = Client(
+async def create_client(settings: Settings, url: str, certificate: ClientCertificate | None = None) -> Client:
+    """Create the OPC UA client for one endpoint.
+
+    With a certificate, the security policy is applied too, which contacts the server
+    to fetch its certificate unless OPCUA_SERVER_CERT pins it.
+    """
+    client = OpcUaClient(
         url,
         timeout=settings.opcua_timeout,
         auto_reconnect=settings.opcua_auto_reconnect,
     )
     if settings.opcua_username is not None:
         client.set_user(settings.opcua_username)
-        client.set_password(settings.opcua_password.get_secret_value())
+        password = settings.opcua_password
+        client.set_password(password.get_secret_value() if password else "")
+    if certificate is not None:
+        await apply_security(client, settings, certificate)
     return client
 
 
@@ -58,6 +73,23 @@ def _auth_description(settings: Settings) -> str:
     return f"user '{settings.opcua_username}'" if settings.opcua_username else "anonymous"
 
 
+def _security_description(settings: Settings) -> str:
+    if settings.opcua_security_policy == "None":
+        return "security policy None"
+    return f"security {settings.opcua_security_policy} {settings.opcua_security_mode}"
+
+
+# Status codes a server returns when it does not (yet) trust the client certificate
+_CERTIFICATE_REJECTED = {
+    "BadSecurityChecksFailed",
+    "BadCertificateUntrusted",
+    "BadCertificateInvalid",
+    "BadCertificateUriInvalid",
+    "BadCertificateUseNotAllowed",
+    "BadCertificateTimeInvalid",
+}
+
+
 async def connect_first_available(settings: Settings) -> tuple[Client, str]:
     """Connect to the first reachable endpoint in settings.opcua_server_url, in order.
 
@@ -65,11 +97,16 @@ async def connect_first_available(settings: Settings) -> tuple[Client, str]:
     that answers but refuses the session, e.g. because of wrong credentials, stops the
     search: silently moving on to the next server (possibly real hardware) would hide it.
     """
-    auth = _auth_description(settings)
+    auth = f"{_auth_description(settings)} with {_security_description(settings)}"
+    try:
+        certificate = await prepare_client_certificate(settings)
+    except CertificateError as e:
+        logger.error("%s", e)
+        raise
     unreachable = []
     for url in settings.opcua_server_url:
-        client = create_client(settings, url)
         try:
+            client = await create_client(settings, url, certificate)
             await client.connect()
         except OSError as e:  # includes TimeoutError and DNS errors
             logger.warning("OPC UA server %s not reachable: %s", _redact_url(url), _describe_error(e))
@@ -77,8 +114,21 @@ async def connect_first_available(settings: Settings) -> tuple[Client, str]:
             continue
         except Exception as e:
             logger.error("Could not connect to OPC UA server %s as %s: %s", _redact_url(url), auth, _describe_error(e))
+            if certificate is not None and isinstance(e, ua.UaStatusCodeError):
+                if ua.StatusCode(e.code).name in _CERTIFICATE_REJECTED:
+                    logger.error(
+                        "The server rejected the client certificate %s. Add it to the server's trusted "
+                        "certificates, then restart.",
+                        certificate.cert_path,
+                    )
             raise
-        logger.info("Connected to OPC UA server %s as %s", _redact_url(url), auth)
+        server_cert = server_certificate_fingerprint(client)
+        logger.info(
+            "Connected to OPC UA server %s as %s%s",
+            _redact_url(url),
+            auth,
+            f" (server certificate SHA-256 {server_cert})" if server_cert else "",
+        )
         return client, url
     message = f"No OPC UA server reachable, tried: {', '.join(unreachable)}"
     logger.error(message)
@@ -134,12 +184,14 @@ def get_opcua_connection_info(ctx: Context) -> str:
     Use this to tell a simulation (e.g. localhost) from real hardware before writing values.
 
     Returns:
-        str: The connected endpoint URL, the login used, and the configured endpoints in the order they are tried.
+        str: The connected endpoint URL, the login and security used, and the configured endpoints
+             in the order they are tried.
     """
     url = ctx.request_context.lifespan_context["opcua_url"]
     configured = ", ".join(_redact_url(u) for u in settings.opcua_server_url)
     return (
-        f"Connected to {_redact_url(url)} as {_auth_description(settings)}. "
+        f"Connected to {_redact_url(url)} as {_auth_description(settings)} "
+        f"with {_security_description(settings)}. "
         f"Configured endpoints, tried in order at startup: {configured}"
     )
 
