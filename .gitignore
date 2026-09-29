@@ -8,3 +8,12 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Test cache
+.pytest_cache/
+
+# Local configuration with credentials
+.env
+
+# OPC UA client certificate and private key
+certs/
