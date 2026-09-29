@@ -179,8 +179,8 @@ Docker takes everything after `=` literally, so don't put quotes around values i
 docker compose up -d --build
 ```
 
-The MCP endpoint is then `http://localhost:8000/mcp`. The compose file publishes the port on
-localhost only, because the server has no MCP-level authentication. To accept other `Host` names
+The MCP endpoint is then `http://localhost:8000/mcp` (set `MCP_PUBLISHED_PORT` in `.env` to use
+another host port). The compose file publishes the port on localhost only, because the server has no MCP-level authentication. To accept other `Host` names
 (for example when publishing the port on the LAN), set `MCP_ALLOWED_HOSTS` accordingly.
 
 Without compose:
