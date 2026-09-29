@@ -4,8 +4,10 @@ from mcp.server.transport_security import TransportSecuritySettings
 from asyncua import Client, Node, ua
 from contextlib import asynccontextmanager
 from pydantic import ValidationError
+from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List
 from urllib.parse import urlsplit, urlunsplit
+import asyncio
 import logging
 import sys
 
@@ -90,6 +92,26 @@ _CERTIFICATE_REJECTED = {
 }
 
 
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def _running_in_container() -> bool:
+    return Path("/.dockerenv").exists()
+
+
+def _warn_about_loopback_in_container(settings: Settings) -> None:
+    """Inside a container, 127.0.0.1/localhost is the container itself, never the host."""
+    if not _running_in_container():
+        return
+    for url in settings.opcua_server_url:
+        if urlsplit(url).hostname in LOOPBACK_HOSTS:
+            logger.warning(
+                "OPCUA_SERVER_URL entry %s points at the container itself, not the host, so it can never "
+                "be reached from here. Use opc.tcp://host.docker.internal:<port> for a server on the host.",
+                _redact_url(url),
+            )
+
+
 async def connect_first_available(settings: Settings) -> tuple[Client, str]:
     """Connect to the first reachable endpoint in settings.opcua_server_url, in order.
 
@@ -98,6 +120,7 @@ async def connect_first_available(settings: Settings) -> tuple[Client, str]:
     search: silently moving on to the next server (possibly real hardware) would hide it.
     """
     auth = f"{_auth_description(settings)} with {_security_description(settings)}"
+    _warn_about_loopback_in_container(settings)
     try:
         certificate = await prepare_client_certificate(settings)
     except CertificateError as e:
@@ -163,7 +186,11 @@ def _describe_error(e: Exception) -> str:
 
 
 async def _write_value(node: Node, value: Any) -> None:
-    """Convert a value to the node's current Python type and write it with the node's variant type."""
+    """Convert a value to the node's current Python type and write it with the node's variant type.
+
+    The DataValue carries no timestamps: B&R and S7-1500 servers reject a write with a
+    SourceTimestamp (BadWriteNotSupported), and asyncua's write_value always sets one.
+    """
     current_value = await node.read_value()
     python_typed_value = value
     # bool is a subclass of int, so check it first
@@ -173,25 +200,44 @@ async def _write_value(node: Node, value: Any) -> None:
         python_typed_value = float(value)
     elif isinstance(current_value, int):
         python_typed_value = int(value)
-    await node.write_value(python_typed_value, await node.read_data_type_as_variant_type())
+    variant_type = await node.read_data_type_as_variant_type()
+    await node.write_attribute(ua.AttributeIds.Value, ua.DataValue(ua.Variant(python_typed_value, variant_type)))
 
 
 @mcp.tool()
-def get_opcua_connection_info(ctx: Context) -> str:
+async def get_opcua_connection_info(ctx: Context) -> str:
     """
-    Show which OPC UA server this MCP server is connected to.
+    Show which OPC UA server this MCP server is connected to, checked live.
 
-    Use this to tell a simulation (e.g. localhost) from real hardware before writing values.
+    Use this to tell a simulation from real hardware before writing values. B&R servers report the
+    application URI urn:<hostname>/BR/UA/EmbeddedServer; an ARsim simulation typically reports
+    urn:127.0.0.1/BR/UA/EmbeddedServer.
 
     Returns:
-        str: The connected endpoint URL, the login and security used, and the configured endpoints
-             in the order they are tried.
+        str: The connected endpoint URL, the server's application URI and state, the login and
+             security used, and the configured endpoints in the order they are tried.
+             Fails if the server does not answer right now (e.g. during a restart).
     """
-    url = ctx.request_context.lifespan_context["opcua_url"]
+    client = _get_client(ctx)
+    url = _redact_url(ctx.request_context.lifespan_context["opcua_url"])
+    try:
+        # ServerArray: the first entry is the server's own application URI
+        server_uris, state = await asyncio.wait_for(
+            client.read_values([client.get_node("i=2254"), client.get_node("i=2259")]),
+            settings.opcua_timeout,
+        )
+    except Exception as e:
+        raise ToolError(
+            f"The OPC UA server at {url} is not answering right now ({_describe_error(e)}); "
+            "it may be restarting, and the connection is re-established automatically if "
+            "OPCUA_AUTO_RECONNECT is on."
+        ) from e
+    server_uri = server_uris[0] if server_uris else "unknown"
+    state_name = ua.ServerState(state).name if isinstance(state, int) else state
     configured = ", ".join(_redact_url(u) for u in settings.opcua_server_url)
     return (
-        f"Connected to {_redact_url(url)} as {_auth_description(settings)} "
-        f"with {_security_description(settings)}. "
+        f"Connected to {url} (server application URI {server_uri}, state {state_name}) "
+        f"as {_auth_description(settings)} with {_security_description(settings)}. "
         f"Configured endpoints, tried in order at startup: {configured}"
     )
 

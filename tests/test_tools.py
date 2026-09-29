@@ -95,3 +95,11 @@ async def test_write_multiple(mcp_client, opcua_server):
     assert "BadNodeIdUnknown" in text
     _, text = await call(mcp_client, "read_multiple_opcua_nodes", node_ids=[ids["float"], ids["int"]])
     assert "1.5" in text and "99" in text
+
+
+async def test_write_sends_no_timestamps(mcp_client, opcua_server):
+    # Like B&R, the test server rejects writes with a SourceTimestamp (reject_timestamped_writes)
+    _, ids = opcua_server
+    is_error, text = await call(mcp_client, "write_opcua_node", node_id=ids["int"], value="2")
+    assert not is_error, text
+    assert text == f"Successfully wrote 2 to node {ids['int']}"
