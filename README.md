@@ -60,7 +60,7 @@ Clone the repository and install the required Python packages:
 ```bash
 git clone https://github.com/kukapay/opcua-mcp.git
 cd opcua-mcp
-pip install mcp[cli] opcua cryptography
+uv sync   # or: pip install "mcp[cli]>=2.2,<3" "asyncua>=2.0.1"
 ```
 
 ### MCP Client Configuration
